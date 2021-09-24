@@ -19,6 +19,8 @@ This sample show how to upload end result to desired folder in ACC project, if w
 
 ![UploadUtil-Image](https://github.com/MadhukarMoogala/UploadUtilFor-ACC/blob/master/UploadUtil2.gif)
 
+![UploadUtilCli-Image](https://github.com/MadhukarMoogala/UploadUtilFor-ACC/blob/master/UploadUtilCli.gif)
+
 # Setup
 
 ## Prerequisites
