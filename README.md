@@ -11,6 +11,8 @@
 
 This sample show how to upload end result to desired folder in ACC project, if we know the Project and Folder Id, we can use two-legged authentication to create storage and version the upload file.
 
+This sample demonstrates the use of WebSocket API and digital signing the activity
+
 ![UploadFileToACC](UploadFileToACC.png)
 
 
@@ -63,7 +65,7 @@ dotnet run
 
 **Visual Studio** (Windows):
 
-Right-click on the project, then go to **Add New Item\Web\JSON File**. Adjust the settings as shown below. For environment variable, define the following:
+Right-click on the project, then go to **Add New Item\Web\JSON File**. Adjust the settings as shown below. Set Forge variables, define the following:
 
 ```json
 {
@@ -75,7 +77,7 @@ Right-click on the project, then go to **Add New Item\Web\JSON File**. Adjust th
 
 ```
 
-Right-click on the project, then go to **Debug**. Adjust the settings as shown below. For environment variable, define the following:
+Alternatively, right-click on the project, then go to **Debug**. Adjust the settings as shown below. For environment variable, define the following:
 
 - FORGE_CLIENT_ID: `your id here`
 - FORGE_CLIENT_SECRET: `your secret here`
@@ -109,7 +111,14 @@ Time Elapsed 00:00:02.56
 Documentation:
 
 - [BIM 360 API](https://developer.autodesk.com/en/docs/bim360/v1/overview/) and [App Provisioning](https://forge.autodesk.com/blog/bim-360-docs-provisioning-forge-apps)
+
 - [Data Management API](https://developer.autodesk.com/en/docs/data/v2/overview/)
+
+- [DA-3-LeggedToken](https://forge.autodesk.com/en/docs/design-automation/v3/developers_guide/3-legged-oauth-token-usage/)
+
+- [DA-WebSocket API](https://forge.autodesk.com/en/docs/design-automation/v3/developers_guide/websocket-api/)
+
+  
 
 ### Tips & Tricks
 
