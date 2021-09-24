@@ -15,6 +15,9 @@ This sample show how to upload end result to desired folder in ACC project, if w
 
 
 
+## Demo
+
+![UploadUtil-Image](https://github.com/MadhukarMoogala/UploadUtilFor-ACC/blob/master/UploadUtil2.gif)
 
 # Setup
 
