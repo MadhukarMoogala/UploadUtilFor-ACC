@@ -9,9 +9,9 @@
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Text.RegularExpressions;
     using System.Threading.Tasks;
-    using System.Linq;
 
     /// <summary>
     /// Defines the <see cref="BucketHandler" />.
@@ -38,48 +38,6 @@
         }
 
         /// <summary>
-        /// Gets or sets the InternalToken.
-        /// </summary>
-        private static dynamic InternalToken { get; set; }
-
-        /// <summary>
-        /// Get the access token from Autodesk.
-        /// </summary>
-        /// <param name="scopes">The scopes<see cref="Scope[]"/>.</param>
-        /// <returns>The <see cref="Task{dynamic}"/>.</returns>
-        public static async Task<dynamic> Get2LeggedTokenAsync(Scope[] scopes)
-        {
-            TwoLeggedApi oauth = new TwoLeggedApi();
-            string grantType = "client_credentials";
-            dynamic bearer = await oauth.AuthenticateAsync(config.ClientId,
-              config.ClientSecret,
-              grantType,
-              scopes);
-            return bearer;
-        }
-
-        /// <summary>
-        /// The GetInternalAsync.
-        /// </summary>
-        /// <returns>The <see cref="Task{dynamic}"/>.</returns>
-        public static async Task<dynamic> GetInternalAsync()
-        {
-            if (InternalToken == null || InternalToken.ExpiresAt < DateTime.UtcNow)
-            {
-                InternalToken = await Get2LeggedTokenAsync(new Scope[] { Scope.BucketCreate,
-                                                                        Scope.BucketRead,
-                                                                        Scope.BucketDelete,
-                                                                        Scope.DataRead,
-                                                                        Scope.DataWrite, 
-                                                                        Scope.DataCreate, 
-                                                                        Scope.CodeAll });
-                InternalToken.ExpiresAt = DateTime.UtcNow.AddSeconds(InternalToken.expires_in);
-            }
-
-            return InternalToken;
-        }
-
-        /// <summary>
         /// The OSSManager.
         /// </summary>
         /// <param name="inputFilePath">The inputFilePath<see cref="string"/>.</param>
@@ -87,7 +45,8 @@
         /// <returns>The <see cref="Task{(XrefTreeArgument downloadUrl, XrefTreeArgument uploadUrl)}"/>.</returns>
         public static async Task<(XrefTreeArgument downloadUrl, XrefTreeArgument uploadUrl)> OSSManager(string inputFilePath, string resultFileName)
         {
-            dynamic oauth = await GetInternalAsync();
+            OAuthHandler.Create(config);
+            dynamic oauth = await OAuthHandler.GetInternalAsync();
             string uploadUrl = string.Empty;
             string downloadUrl = string.Empty;
             // 1. ensure bucket exists
@@ -184,8 +143,9 @@
         /// <returns>The <see cref="Task{(XrefTreeArgument uploadUrl,string objectId)}"/>.</returns>
         public async Task<(XrefTreeArgument uploadUrl, string objectId)> GetBIM360UploadUrlAndObjectIdAsync()
         {
-            dynamic oAuth = await GetInternalAsync();
-            var objectId = await GetBIM360UploadObjectId(oAuth);
+            OAuthHandler.Create(config);
+            dynamic oauth = await OAuthHandler.GetInternalAsync();
+            var objectId = await GetBIM360UploadObjectId(oauth);
             var match = Regex.Match(objectId, ".*:.*:(.*)/(.*)");
             var bucketName = match.Groups[1].Value;
             var objectName = match.Groups[2].Value;
@@ -196,7 +156,7 @@
                 Url = UploadUrl,
                 Headers = new Dictionary<string, string>()
                 {
-                    { "Authorization", "Bearer " + oAuth.access_token }
+                    { "Authorization", "Bearer " + oauth.access_token }
                 }
             }, objectId);
         }
@@ -209,10 +169,11 @@
         public async Task<string> CreateVersionFileAsync(string objectId)
         {
 
-            dynamic oauth = await GetInternalAsync();
+            OAuthHandler.Create(config);
+            dynamic oauth = await OAuthHandler.GetInternalAsync();
             ItemsApi itemsApi = new ItemsApi();
-            itemsApi.Configuration.AccessToken = oauth.access_token;      
-            var itemBody =  new CreateItem
+            itemsApi.Configuration.AccessToken = oauth.access_token;
+            var itemBody = new CreateItem
             (
                 new JsonApiVersionJsonapi
                 (
@@ -291,9 +252,9 @@
             catch (ApiException ex)
             {
                 //we met a conflict
-                
+
                 ErrorContent errorContent = JsonConvert.DeserializeObject<ErrorContent>(ex.ErrorContent);
-                if(errorContent.Errors?[0].Status == "409")//Conflict
+                if (errorContent.Errors?[0].Status == "409")//Conflict
                 {
                     //Get ItemId of our file
                     itemId = await GetItemIdAsync(oauth);
@@ -302,47 +263,55 @@
                     itemId = await UpdateVersionAsync(objectId, oauth, itemId);
                 }
 
-            }           
+            }
             return itemId;
         }
 
+        /// <summary>
+        /// The GetItemIdAsync.
+        /// </summary>
+        /// <param name="oauth">The oauth<see cref="dynamic"/>.</param>
+        /// <returns>The <see cref="Task{string}"/>.</returns>
         private async Task<string> GetItemIdAsync(dynamic oauth)
         {
             FoldersApi foldersApi = new FoldersApi();
             foldersApi.Configuration.AccessToken = oauth.access_token;
-            DynamicJsonResponse foldersResponse = await foldersApi.GetFolderContentsAsync(Specifications.PROJECTID,
-                                                Specifications.FOLDERID,
-                                                filterType: new List<string>() { "items" },
-                                                filterExtensionType: new List<string>() { "items:autodesk.bim360:File" });
             IEnumerable<dynamic> itemList = await GetFolderItems(Specifications.PROJECTID, Specifications.FOLDERID, oauth);
             var itemId = itemList.First(item => item.Attributes.DisplayName.Equals(Specifications.FILENAME,
                 StringComparison.OrdinalIgnoreCase)).Id;
             return itemId;
         }
 
+        /// <summary>
+        /// The UpdateVersionAsync.
+        /// </summary>
+        /// <param name="objectId">The objectId<see cref="string"/>.</param>
+        /// <param name="oauth">The oauth<see cref="dynamic"/>.</param>
+        /// <param name="itemId">The itemId<see cref="string"/>.</param>
+        /// <returns>The <see cref="Task{string}"/>.</returns>
         private static async Task<string> UpdateVersionAsync(string objectId, dynamic oauth, string itemId)
         {
             var versionsApi = new VersionsApi();
             versionsApi.Configuration.AccessToken = oauth.access_token;
             var relationships = new CreateVersionRefsRelationships
-                                            (
-                                                new CreateVersionDataRelationshipsItem
-                                                (
-                                                    new CreateVersionDataRelationshipsItemData
-                                                    (
-                                                        CreateVersionDataRelationshipsItemData.TypeEnum.Items,
-                                                        itemId
-                                                    )
-                                                ),
-                                                new CreateItemRelationshipsStorage
-                                                (
-                                                    new CreateItemRelationshipsStorageData
-                                                    (
-                                                        CreateItemRelationshipsStorageData.TypeEnum.Objects,
-                                                        objectId
-                                                    )
-                                                )
-                                            );
+            (
+                new CreateVersionDataRelationshipsItem
+                (
+                    new CreateVersionDataRelationshipsItemData
+                    (
+                        CreateVersionDataRelationshipsItemData.TypeEnum.Items,
+                        itemId
+                    )
+                ),
+                new CreateItemRelationshipsStorage
+                (
+                    new CreateItemRelationshipsStorageData
+                    (
+                        CreateItemRelationshipsStorageData.TypeEnum.Objects,
+                        objectId
+                    )
+                )
+            );
             var createVersion = new CreateVersion(
             new JsonApiVersionJsonapi(
                 JsonApiVersionJsonapi.VersionEnum._0
@@ -366,31 +335,81 @@
             return itemId;
         }
 
-        public async Task<IEnumerable<Item>> GetFolderItems(string projectId, string folderId , dynamic oAuth)
+        /// <summary>
+        /// The GetFolderItems.
+        /// </summary>
+        /// <param name="projectId">The projectId<see cref="string"/>.</param>
+        /// <param name="folderId">The folderId<see cref="string"/>.</param>
+        /// <param name="oAuth">The oAuth<see cref="dynamic"/>.</param>
+        /// <returns>The <see cref="Task{IEnumerable{Item}}"/>.</returns>
+        public async Task<IEnumerable<Item>> GetFolderItems(string projectId, string folderId, dynamic oAuth)
         {
             var foldersApi = new FoldersApi();
             foldersApi.Configuration.AccessToken = oAuth.access_token;
-            dynamic folderContents =  await foldersApi.GetFolderContentsAsync(projectId, folderId, filterType: new List<string>() { "items" }, filterExtensionType: new List<string>() { "items:autodesk.bim360:File" });
-            return folderContents.data;
+            DynamicJsonResponse folderContents = await foldersApi.GetFolderContentsAsync(projectId,
+                                                       folderId,
+                                                       filterType: new List<string>() { "items" },
+                                                       filterExtensionType: new List<string>() { "items:autodesk.bim360:File" });
+            var items = folderContents.ToObject<Items>();
+            return items.Data;
         }
     }
+
+    /// <summary>
+    /// Defines the <see cref="Jsonapi" />.
+    /// </summary>
     public class Jsonapi
     {
+        /// <summary>
+        /// Gets or sets the version.
+        /// </summary>
         public string version { get; set; }
     }
 
+    /// <summary>
+    /// Defines the <see cref="Error" />.
+    /// </summary>
     public class Error
     {
+        /// <summary>
+        /// Gets or sets the Id.
+        /// </summary>
         public string Id { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Status.
+        /// </summary>
         public string Status { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Code.
+        /// </summary>
         public string Code { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Title.
+        /// </summary>
         public string Title { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Detail.
+        /// </summary>
         public string Detail { get; set; }
     }
 
+    /// <summary>
+    /// Defines the <see cref="ErrorContent" />.
+    /// </summary>
     public class ErrorContent
     {
+        /// <summary>
+        /// Gets or sets the Jsonapi.
+        /// </summary>
         public Jsonapi Jsonapi { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Errors.
+        /// </summary>
         public List<Error> Errors { get; set; }
     }
 }

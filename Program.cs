@@ -1,8 +1,10 @@
 ﻿namespace UploadUtil
 {
+    using Autodesk.Forge;
     using Autodesk.Forge.Core;
     using Autodesk.Forge.DesignAutomation;
     using Autodesk.Forge.DesignAutomation.Model;
+    using Autodesk.Forge.Model;
     using Das.WorkItemSigner;
     using Microsoft.Extensions.Configuration;
     using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +12,7 @@
     using Newtonsoft.Json;
     using Newtonsoft.Json.Linq;
     using Serilog;
+    using Serilog.Core;
     using System;
     using System.Collections.Generic;
     using System.IO;
@@ -82,6 +85,7 @@
         public WorkItemStatus Data { get; set; }
     }
 
+
     /// <summary>
     /// Defines the <see cref="Program" />.
     /// </summary>
@@ -95,7 +99,7 @@
         /// <summary>
         /// Defines the Api.
         /// </summary>
-        private static DesignAutomationClient Api;
+        private static DesignAutomationClient Api = null;
 
         /// <summary>
         /// Defines the ws.
@@ -110,7 +114,7 @@
         private static async Task<(string owner, string token)> GetOwnerAsync(string clientId)
         {
             Console.WriteLine("Setting up owner...");
-            var resp = await Api.ForgeAppsApi.GetNicknameAsync("me");
+            var resp = await Api?.ForgeAppsApi?.GetNicknameAsync("me");
             if (resp.Content == clientId)
             {
                 Console.WriteLine("\tNo nickname for this clientId yet. Attempting to create one...");
@@ -176,8 +180,7 @@
                     }
                     if (wsresp.Action.Equals("status"))
                     {
-
-                        Console.WriteLine($"\t{wsresp.Data.Status}");
+                        Console.WriteLine($"\tWorkitem Id: {wsresp.Data.Id}..{wsresp.Data.Status}");
                         switch (wsresp.Data.Status)
                         {
                             case Status.Cancelled:
@@ -199,10 +202,6 @@
 
                                     Console.WriteLine($"\t\tReport Downloaded {fname}");
                                     shouldExit = true;
-
-                                    //Create New Version of file
-
-
                                     break;
                                 }
                         }
@@ -221,6 +220,89 @@
         }
 
         /// <summary>
+        /// The SetupConfig.
+        /// </summary>
+        /// <param name="forgeConfiguration">The forgeConfiguration<see cref="ForgeConfiguration"/>.</param>
+        /// <param name="logger">The logger<see cref="Logger"/>.</param>
+        /// <returns>The <see cref="DesignAutomationClient"/>.</returns>
+        private static DesignAutomationClient SetupConfig(out ForgeConfiguration forgeConfiguration, Logger logger)
+        {
+            //Step 1: Create Configuration
+            /**
+            Create appsettings.user.json
+            {
+              "Forge": {
+                "ClientId": "",
+                "ClientSecret": ""
+              }
+            }
+            Set Copy To Output Directory as Copy Always in Properties.
+             */
+            var daConfig = new ConfigurationBuilder()
+                .AddEnvironmentVariables()
+                .AddJsonFile("appsettings.user.json")
+                .Build();
+
+
+            forgeConfiguration = daConfig.GetSection("Forge").Get<ForgeConfiguration>();
+            if (String.IsNullOrEmpty(forgeConfiguration.ClientId) || String.IsNullOrEmpty(forgeConfiguration.ClientSecret))
+            {
+                var forgeClientId = Environment.GetEnvironmentVariable("FORGE_CLIENT_ID");
+                var forgeClientSecret = Environment.GetEnvironmentVariable("FORGE_CLIENT_SECRET");
+                forgeConfiguration = new ForgeConfiguration
+                {
+                    ClientId = forgeClientId,
+                    ClientSecret = forgeClientSecret
+                };
+
+                daConfig = new ConfigurationBuilder().AddForgeAlternativeEnvironmentVariables().Build();
+            }
+
+            //Step 2: Populate Forge Design Automation service,
+            //get Design Automation API Client
+            var Api = new ServiceCollection()
+                .AddLogging(builder =>
+                {
+                    builder.SetMinimumLevel(LogLevel.Information);
+                    builder.AddSerilog(logger, dispose: true);
+                })
+                .AddDesignAutomation(daConfig)
+                .Services.BuildServiceProvider().
+                GetRequiredService<DesignAutomationClient>();
+
+
+
+
+
+            return Api;
+        }
+        
+        
+
+        internal class Token
+        {
+            public Token(dynamic access_token, DateTime expires)
+            {
+                AccessToken = access_token;
+                RefreshToken = access_token.refresh_token;
+                ExpiryTime = expires;
+            }
+            public dynamic AccessToken;
+            public string RefreshToken;
+            public DateTime ExpiryTime;
+            public bool IsExpired()
+            {
+                if(ExpiryTime < DateTime.Now)
+                {
+                    return true;
+                }
+                return false;
+            }
+            
+        }
+        public static Token token;
+
+        /// <summary>
         /// The Main.
         /// </summary>
         /// <param name="args">The args<see cref="string[]"/>.</param>
@@ -233,47 +315,61 @@
              * SET FORGE_CLIENT_ID=<>
              * SET FORGE_CLIENT_SECRET=<>
              */
-            var config = new ConfigurationBuilder()
-                .AddForgeAlternativeEnvironmentVariables()
-                .AddJsonFile("appsettings.user.json", false, true)
-                .Build();
-            var forgeClientId = config.GetValue<String>("Forge:ClientId");
-            var forgeClientSecret = config.GetValue<String>("Forge:ClientSecret");
 
+           
             var logger = new LoggerConfiguration()
            .WriteTo.Console()
-           .CreateLogger();
-            //Step 2: Populate Forge Design Automation service,
-            //get Design Automation API Client
-            Api = new ServiceCollection()
-                .AddLogging(builder =>
+           .CreateLogger();            
+
+
+            //Step2 : Setup configuration to use Forge and DA client
+
+            Api = SetupConfig(out ForgeConfiguration forgeConfiguration, logger);
+
+            //Get three legged token
+            var oAuthHandler = OAuthHandler.Create(forgeConfiguration);
+
+            //We want to sleep the thread until we get 3L accessk_token.
+            //https://stackoverflow.com/questions/6306168/how-to-sleep-a-thread-until-callback-for-asynchronous-function-is-received
+            AutoResetEvent stopWaitHandle = new AutoResetEvent(false);
+            oAuthHandler.Invoke3LeggedOAuth(async (bearer) =>
+            {
+                // This is our application delegate. It is called upon success or failure
+                // after the process completed
+                if (bearer == null)
                 {
-                    builder.SetMinimumLevel(LogLevel.Information);
-                    builder.AddSerilog(logger, dispose: true);
+                    Console.Error.WriteLine("Sorry, Authentication failed!", "3legged test");
+                    return;
+                }
 
-                })
-                .AddDesignAutomation(config)                
-                .Services
-                .BuildServiceProvider()
-                .GetRequiredService<DesignAutomationClient>();
+                // The call returned successfully and you got a valid access_token.                
+                DateTime dt = DateTime.Now;
+                dt.AddSeconds(double.Parse(bearer.expires_in.ToString()));
 
-            //Step 3: Create Owner
-            var (owner, bearerToken) = await GetOwnerAsync(forgeClientId);
+                UserProfileApi userProfileApi = new UserProfileApi();
+                userProfileApi.Configuration.AccessToken = bearer.access_token;
+                DynamicJsonResponse userResponse = await userProfileApi.GetUserProfileAsync();
+                UserProfile user = userResponse.ToObject<UserProfile>();
+                Console.WriteLine($"\n\t ----------------Message---------------------------");
+                Console.WriteLine($"\n\t ****Hello {user.FirstName} !, you are in :)*******");
+                Console.WriteLine($"\n\t --------------------------------------------------");
+                token = new Token(bearer, dt);                
+                stopWaitHandle.Set();
+            });
+            stopWaitHandle.WaitOne();
+
+            //Step 3: Create Owner and Fetch bearerToken, this token has "code:all" only scope.
+            var (_, bearerToken) = await GetOwnerAsync(forgeConfiguration.ClientId);
             if (bearerToken == null)
             {
                 return;
             }
 
-
-            BucketHandler bucketHandler = new BucketHandler(new ForgeConfiguration()
-            {
-                ClientId = forgeClientId,
-                ClientSecret = forgeClientSecret
-            });
+            BucketHandler bucketHandler = new BucketHandler(forgeConfiguration);
 
 
             //Step 4: Create or Update Activity
-            //await SetupActivityAsync();
+            //await SetupActivityAsync(); Here we use PlotToPdf Activity
 
 
             //Step 5: Generating the public signature
@@ -299,11 +395,11 @@
                 ActivityId = signer.Sign(Specifications.FQActivityId)
             };
 
-            //Step 8: 
+            //Step 8: Prepare Workitem 
 
             var (UploadArgument, objectId) = await bucketHandler.GetBIM360UploadUrlAndObjectIdAsync();
 
-            var a = new Dictionary<string, IArgument>
+            var activity = new Dictionary<string, IArgument>
                 {
                     {
                      "HostDwg", new XrefTreeArgument
@@ -316,13 +412,10 @@
             var workItem = new WorkItem
             {
                 ActivityId = Specifications.FQActivityId,
-                Arguments = a,
+                Arguments = activity,
                 Signatures = signature
 
-            };
-            Console.WriteLine("Workitem Payload:");
-            Console.WriteLine($"\n\t{JsonConvert.SerializeObject(workItem, Formatting.Indented)}");
-
+            };            
             var buffer = new byte[4096];
             using (ws = new ClientWebSocket())
             {
@@ -345,7 +438,21 @@
             {
                 var fileId = await bucketHandler.CreateVersionFileAsync(objectId);
                 Console.WriteLine($"\tSuccessfully Versioned : {fileId}");
+                if (!token.IsExpired())
+                {
+                    dynamic bearer = await oAuthHandler.GetRefreshedTokenAsync(token.RefreshToken);
+                    token.AccessToken = bearer;
+                }
+                DataManagement management = new DataManagement(forgeConfiguration);
+                var TreeNodes = await management.GetList(token.AccessToken);
+                Console.WriteLine($"\n\tDisplaying Hub Tree, look for {Specifications.FILENAME.Replace(".dwg",".pdf")}\n\n");
+                foreach (var node in TreeNodes)
+                {
+                    PrintManager.PrintNode(node, indent: "");
+                }
+
             }
         }
     }
+
 }
